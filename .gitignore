@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+.epub_venv/
+*.zip
+*.b64
+*.log
+*.wav
+*.m4a
+*.ogg
+*.epub
