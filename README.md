@@ -40,6 +40,8 @@ cloud-video-to-epub/
     ├── fetch_and_pack.py      # [本地] 拉取音视频、转 16kHz Opus 并自动分卷打包 (<45 MiB)
     ├── setup_asr.sh           # [云端] 魔搭 /mnt/workspace 持久化环境与模型一键安装
     ├── transcribe_cpu_fast.py # [云端] 2路并发 + BatchedInferencePipeline + 断点续跑转写
+    ├── download_transcripts.py# [全自动/防拦截] 零依赖传输工具：云端一键 serve/本地一键 pull + 反拦截补丁
+    ├── playwright_pull.py     # [自动化浏览器] 彻底修复 showSaveFilePicker 弹窗拦截的 Playwright 下载脚本
     ├── extract_utf8_zip.py    # [本地] 修复 Linux zip 中文文件名编码并校验 MD5 解包
     └── build_epub.py          # [本地] 生成宋体封面、OpenCC/引号检查、组装合并.md 并打包与内检 EPUB
 ```
@@ -110,21 +112,35 @@ tail -f transcribe_fast.log
 
 ### 第 4 步：无损拉回逐字稿并并行 AI 润色
 
-如果 WebIDE 直接下载受浏览器限制，可在魔搭终端打包并按 9800 字符折行输出（或通过文件下载）：
+在云端打包完成后，为防止 Web IDE / 浏览器拦截下载，推荐以下两种全自动拉回方案：
 
+#### 方案 A：云端直连快传（推荐，零依赖、零 Token 消耗、100% 成功）
+
+在魔搭终端启动单次下载服务：
 ```bash
 cd /mnt/workspace/work_project
 zip -j plain_transcripts.zip 逐字稿/*.txt -x "*timestamps*"
-md5sum plain_transcripts.zip
+python3 scripts/download_transcripts.py serve --file plain_transcripts.zip --port 8080
 ```
-
-拉回本地后用 `scripts/extract_utf8_zip.py` 解包（自动修复 Linux `zip` 中文文件名 CP437 乱码）：
-
+本地终端一键拉取并自动完成 MD5 校验和 UTF-8 解包：
 ```bash
-python3 scripts/extract_utf8_zip.py plain_transcripts.zip --out-dir ./my_book_project/逐字稿 --md5 <MD5>
+python3 scripts/download_transcripts.py pull \
+  --url "http://<云服务器IP或公网URL>:8080/download?token=<云端打印的TOKEN>" \
+  --out-dir ./my_book_project/逐字稿
 ```
 
-然后按 `SKILL.md` 中的规则并行派出 LLM 润色到 `./my_book_project/润色稿/`。
+#### 方案 B：自动化浏览器防拦截下载（Playwright / 浏览器自动化）
+
+如果使用 AI 浏览器代理或 Playwright 自动化下载，VS Code Web 会默认调用 `window.showSaveFilePicker` 导致弹窗无响应或 `dl.path() == null`。执行防拦截拉取：
+```bash
+# 自动注入 delete window.showSaveFilePicker 降级补丁并捕获下载流
+python3 scripts/playwright_pull.py --file plain_transcripts.zip --out ./my_book_project/plain_transcripts.zip
+```
+或者在浏览器控制台（F12）运行 `python3 scripts/download_transcripts.py patch-js` 打印的代码，即可在页面文件树中右键点击“Download”正常下载。
+
+---
+
+逐字稿拉回后，按 `SKILL.md` 中的规则并行派出 LLM 润色到 `./my_book_project/润色稿/`。
 
 ### 第 5 步：生成宋体封面、打包 EPUB 并完成 5 项内检
 

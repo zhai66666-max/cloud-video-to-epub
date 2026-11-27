@@ -52,15 +52,26 @@ description: 云服务器版「视频/音频 → 语音转写 → 并行AI润色
    - 黄金配比：**`workers=2` × `threads_per_worker=4` + `BatchedInferencePipeline(batch_size=4)` + `beam_size=1` + 指定主语言（如 `--language zh`）**，总吞吐可达 **~11x 实时**，内存仅占 ~5.5 GB / 28 GB。
    - 注意：`transcribe_cpu_fast.py` 使用 `multiprocessing.get_context("spawn")` 并通过环境变量 `OMP_NUM_THREADS=4` 限制每进程线程数。
 
-5. **WebIDE 无法直接触发浏览器下载时的无损回传方案**
-   - 当浏览器沙箱拦截下载或 `dl.path()` 返回 `null` 时，纯文本 `.txt` 体积很小（10–20 篇打包后仅 100–200 KB），可在云端执行：
+5. **WebIDE 下载被拦截与全自动无损回传方案**
+   - **拦截根本原因**：VS Code Web / ModelScope Code Editor 优先调用 HTML5 File System Access API (`window.showSaveFilePicker`) 弹窗保存。在无头/自动化浏览器或受限 Webview 下，该弹窗因缺少物理用户手势而被静默拦截，导致 `dl.path()` 为 `null`。
+   - **脚本级反拦截方案 A（推荐，零依赖命令行快传）**：
+     云端执行：
      ```bash
      zip -j plain.zip 逐字稿/*.txt -x "*timestamps*"
-     md5sum plain.zip
-     base64 -w 0 plain.zip | fold -w 9800 > plain_folded.b64
+     python3 scripts/download_transcripts.py serve --file plain.zip --port 8080
      ```
-     *（用 `fold -w 9800` 避开部分编辑器单行 10,000 字符截断。）*
-   - 在本地用 `scripts/extract_utf8_zip.py` 解压时，务必处理 Linux `zip` 未置 UTF-8 标志位（`flag_bits & 0x800 == 0`）导致的 CP437 乱码：`name.encode("cp437").decode("utf-8")`。
+     本地执行一键拉取与解包：
+     ```bash
+     python3 scripts/download_transcripts.py pull --url "http://<IP>:8080/download?token=<TOKEN>" --out-dir ./逐字稿/
+     ```
+   - **脚本级反拦截方案 B（Playwright / 自动化浏览器）**：
+     在自动化会话启动前注入 `delete window.showSaveFilePicker;`，强制 WebIDE 回退至标准 `<a download="plain.zip" href="blob:...">`，配合 `page.expect_download()` 即可 100% 捕获落盘：
+     ```bash
+     python3 scripts/playwright_pull.py --file plain.zip --out ./plain.zip
+     ```
+   - **最后保底（纯文本 Base64 降级）**：
+     如果网络完全单向阻断，才使用 `base64 -w 0 plain.zip | fold -w 9800 > plain_folded.b64` 经由剪贴板/终端读取，并用 `scripts/extract_utf8_zip.py --from-b64` 解压。
+   - **Linux Zip 中文名乱码修复**：解压时务必处理 Linux `zip` 未置 UTF-8 标志位（`flag_bits & 0x800 == 0`）导致的 CP437 乱码：`name.encode("cp437").decode("utf-8")`。
 
 6. **并行 AI 润色铁律（`video-to-epub` 精校标准）**
    - **完整保留原文**：严禁总结、缩水或略写论据，润色后字符数应略高于原逐字稿（因补全了标点、空格与 `###` 小节标题）。
@@ -84,8 +95,9 @@ description: 云服务器版「视频/音频 → 语音转写 → 并行AI润色
    - 如用户尚未开机，协助启动魔搭 `CPU环境`（遇滑块验证需暂停交由用户手动拖动）。
    - 上传 `speech_part*.zip` 到 `/mnt/workspace/<项目>/` 并解压，跑 `bash setup_asr.sh`（持久安装），再 `nohup` 后台启动 `transcribe_cpu_fast.py`。
    - 建议每 10 分钟定时巡检一次进度；若全片已转完再拉取，或者边转边拉，注意**全部取回并校验 MD5 后及时停止云端实例**。
-4. **本地解包与并行润色**：
-   - 用 `scripts/extract_utf8_zip.py` 还原正确中文文件名。
+4. **拉取逐字稿、本地解包与并行润色**：
+   - 使用 `scripts/download_transcripts.py`（云端 serve / 本地 pull）或 `scripts/playwright_pull.py` 自动化防拦截拉回逐字稿包。
+   - 用 `scripts/extract_utf8_zip.py` 还原正确中文文件名并校验 MD5。
    - 多路并行派出润色子代理/Swarm 工人写入 `润色稿/<stem>.md`（推荐 `Gemini 4 Hydrogen (Medium)` 或同等长上下文高性价比模型）。
    - 每篇写完后核查字符数、0 ASCII 引号、首行 `##` 与来源行。
 5. **打包与交付**：
